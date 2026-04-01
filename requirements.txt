@@ -1,0 +1,11 @@
+# TruthLens - AI-Generated Media Detection
+# Python 3.14 compatible (using PyTorch)
+
+torch>=2.2.0
+torchvision>=0.17.0
+numpy>=1.26.0
+opencv-python>=4.9.0
+scikit-learn>=1.4.0
+matplotlib>=3.8.0
+Pillow>=10.0.0
+tqdm>=4.66.0

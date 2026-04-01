@@ -1,0 +1,39 @@
+# Virtual environment
+.venv/
+
+# Dataset (large binary data)
+Dataset/
+
+# Trained models (large binary files)
+models/*.pth
+models/*.pt
+
+# Training outputs
+models/*.png
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# IDE
+.vscode/
+.idea/
+
+# Environment
+.env
+.env.*
+
+# Logs
+*.log
+
+# Streamlit
+.streamlit/secrets.toml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Jupyter
+.ipynb_checkpoints/
