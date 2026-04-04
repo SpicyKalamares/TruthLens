@@ -15,7 +15,7 @@ import io
 
 # Configuration
 IMG_SIZE = 224
-MODEL_PATH = 'models/deepfake_detector.pth'
+MODEL_PATH = 'models/fine_tuned_model.pth'  # Use fine-tuned model
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 # Ensure deterministic behavior
@@ -154,10 +154,12 @@ def predict_image_tta(model, image_bytes):
     # Average probabilities
     avg_probs = torch.stack(all_probs).mean(dim=0)
     confidence, predicted = torch.max(avg_probs, 0)
-    class_idx = predicted.item()
-    class_name = 'Fake' if class_idx == 0 else 'Real'
     fake_prob = avg_probs[0].item()
     real_prob = avg_probs[1].item()
+
+    # Standard threshold (fine-tuned model should work better)
+    FAKE_THRESHOLD = 0.50  # Classify as Fake if fake_prob > 50%
+    class_name = 'Fake' if fake_prob > FAKE_THRESHOLD else 'Real'
 
     return class_name, confidence.item(), fake_prob, real_prob
 
@@ -178,10 +180,12 @@ def predict_video_frame_tta(model, frame):
 
     avg_probs = torch.stack(all_probs).mean(dim=0)
     confidence, predicted = torch.max(avg_probs, 0)
-    class_idx = predicted.item()
-    class_name = 'Fake' if class_idx == 0 else 'Real'
     fake_prob = avg_probs[0].item()
     real_prob = avg_probs[1].item()
+
+    # Standard threshold (fine-tuned model should work better)
+    FAKE_THRESHOLD = 0.50  # Classify as Fake if fake_prob > 50%
+    class_name = 'Fake' if fake_prob > FAKE_THRESHOLD else 'Real'
 
     return class_name, confidence.item(), fake_prob, real_prob
 

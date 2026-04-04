@@ -11,8 +11,13 @@ import torch.optim as optim
 from torch.cuda.amp import autocast, GradScaler
 from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms, models
-from PIL import Image
+from PIL import Image, ImageFile
 import numpy as np
+
+# Allow loading truncated images
+ImageFile.LOAD_TRUNCATED_IMAGES = True
+# Disable decompression bomb warning for large images
+Image.MAX_IMAGE_PIXELS = None
 from sklearn.metrics import classification_report, confusion_matrix
 import matplotlib.pyplot as plt
 from tqdm import tqdm
@@ -20,12 +25,15 @@ from tqdm import tqdm
 # Configuration
 IMG_SIZE = 224  # MobileNetV2 native resolution
 BATCH_SIZE = 64  # Smaller batch for larger images
-EPOCHS = 15
+EPOCHS = 20
 LEARNING_RATE = 0.001
-DATA_DIR = 'Dataset/deepfake-vs-real-60k'
-TRAIN_SPLIT = 0.8  # 80% train, 20% test
-MAX_TRAIN_SAMPLES = 30000  # Stratified subset — faster training, minimal accuracy loss
+DATA_DIR = 'Dataset/train'  # Updated to use new dataset location
+TEST_DIR = 'Dataset/test'  # Separate test directory
+MAX_TRAIN_SAMPLES = None  # Use all samples for better generalization
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+# Class imbalance handling
+USE_CLASS_WEIGHTS = True  # Use weighted loss to handle imbalance
 
 # Enable cuDNN benchmarking for faster training
 if torch.cuda.is_available():
@@ -34,13 +42,61 @@ if torch.cuda.is_available():
 class ImageDataset(Dataset):
     """Custom dataset for loading images with augmentation."""
 
-    def __init__(self, root_dir, transform=None, max_samples=None):
+    def __init__(self, root_dir, transform=None, max_samples=None, balance_classes=False):
         self.root_dir = root_dir
         self.transform = transform
         self.samples = []
         self.class_to_idx = {'Fake': 0, 'Real': 1}
 
-        # Collect all samples
+        # Collect all samples per class
+        class_samples = {'Fake': [], 'Real': []}
+        for class_name, idx in self.class_to_idx.items():
+            class_dir = os.path.join(root_dir, class_name)
+            if os.path.exists(class_dir):
+                for img_name in os.listdir(class_dir):
+                    img_path = os.path.join(class_dir, img_name)
+                    if img_name.lower().endswith(('.jpg', '.jpeg', '.png', '.bmp', '.webp')):
+                        class_samples[class_name].append((img_path, idx))
+
+        # Balance classes by undersampling the majority class
+        if balance_classes:
+            min_count = min(len(class_samples['Fake']), len(class_samples['Real']))
+            class_samples['Fake'] = class_samples['Fake'][:min_count]
+            class_samples['Real'] = class_samples['Real'][:min_count]
+            print(f"  [Balanced] Fake: {len(class_samples['Fake'])}, Real: {len(class_samples['Real'])}")
+
+        # Combine samples
+        for class_name in self.class_to_idx.keys():
+            self.samples.extend(class_samples[class_name])
+
+    def __len__(self):
+        return len(self.samples)
+
+    def __getitem__(self, idx):
+        img_path, label = self.samples[idx]
+        try:
+            image = Image.open(img_path).convert('RGBA').convert('RGB')
+            # Fast thumbnail resize before transforms (avoids decoding full resolution)
+            image.thumbnail((IMG_SIZE, IMG_SIZE), Image.Resampling.LANCZOS)
+            if self.transform:
+                image = self.transform(image)
+            return image, label
+        except Exception:
+            # Return a blank image if loading fails
+            image = Image.new('RGB', (IMG_SIZE, IMG_SIZE), (0, 0, 0))
+            if self.transform:
+                image = self.transform(image)
+            return image, label
+
+
+class TrainDataset(Dataset):
+    """Training dataset - defined at module level for Windows pickle compatibility."""
+    def __init__(self, indices, root_dir, transform):
+        self.indices = indices
+        self.root_dir = root_dir
+        self.transform = transform
+        self.class_to_idx = {'Fake': 0, 'Real': 1}
+        self.samples = []
         for class_name, idx in self.class_to_idx.items():
             class_dir = os.path.join(root_dir, class_name)
             if os.path.exists(class_dir):
@@ -50,25 +106,108 @@ class ImageDataset(Dataset):
                         self.samples.append((img_path, idx))
 
     def __len__(self):
-        return len(self.samples)
+        return len(self.indices)
 
     def __getitem__(self, idx):
-        img_path, label = self.samples[idx]
-        image = Image.open(img_path).convert('RGB')
-        if self.transform:
-            image = self.transform(image)
-        return image, label
+        img_path, label = self.samples[self.indices[idx]]
+        try:
+            image = Image.open(img_path).convert('RGBA').convert('RGB')
+            image.thumbnail((IMG_SIZE, IMG_SIZE), Image.Resampling.LANCZOS)
+            if self.transform:
+                image = self.transform(image)
+            return image, label
+        except Exception:
+            image = Image.new('RGB', (IMG_SIZE, IMG_SIZE), (0, 0, 0))
+            if self.transform:
+                image = self.transform(image)
+            return image, label
+
+
+class TestDataset(Dataset):
+    """Test dataset - defined at module level for Windows pickle compatibility."""
+    def __init__(self, indices, root_dir, transform):
+        self.indices = indices
+        self.root_dir = root_dir
+        self.transform = transform
+        self.class_to_idx = {'Fake': 0, 'Real': 1}
+        self.samples = []
+        for class_name, idx in self.class_to_idx.items():
+            class_dir = os.path.join(root_dir, class_name)
+            if os.path.exists(class_dir):
+                for img_name in os.listdir(class_dir):
+                    img_path = os.path.join(class_dir, img_name)
+                    if img_name.lower().endswith(('.jpg', '.jpeg', '.png', '.bmp', '.webp')):
+                        self.samples.append((img_path, idx))
+
+    def __len__(self):
+        return len(self.indices)
+
+    def __getitem__(self, idx):
+        img_path, label = self.samples[self.indices[idx]]
+        try:
+            image = Image.open(img_path).convert('RGBA').convert('RGB')
+            image.thumbnail((IMG_SIZE, IMG_SIZE), Image.Resampling.LANCZOS)
+            if self.transform:
+                image = self.transform(image)
+            return image, label
+        except Exception:
+            image = Image.new('RGB', (IMG_SIZE, IMG_SIZE), (0, 0, 0))
+            if self.transform:
+                image = self.transform(image)
+            return image, label
+
+
+class ValDataset(Dataset):
+    """Validation dataset wrapper - uses TestDataset pattern with test_transform."""
+    def __init__(self, indices, root_dir, transform):
+        self.indices = indices
+        self.root_dir = root_dir
+        self.transform = transform  # test_transform: Resize + ToTensor + Normalize (no augmentation)
+        self.class_to_idx = {'Fake': 0, 'Real': 1}
+        self.samples = []
+        for class_name, idx in self.class_to_idx.items():
+            class_dir = os.path.join(root_dir, class_name)
+            if os.path.exists(class_dir):
+                for img_name in os.listdir(class_dir):
+                    img_path = os.path.join(class_dir, img_name)
+                    if img_name.lower().endswith(('.jpg', '.jpeg', '.png', '.bmp', '.webp')):
+                        self.samples.append((img_path, idx))
+
+    def __len__(self):
+        return len(self.indices)
+
+    def __getitem__(self, idx):
+        img_path, label = self.samples[self.indices[idx]]
+        try:
+            image = Image.open(img_path).convert('RGBA').convert('RGB')
+            image.thumbnail((IMG_SIZE, IMG_SIZE), Image.Resampling.LANCZOS)
+            if self.transform:
+                image = self.transform(image)
+            return image, label
+        except Exception:
+            image = Image.new('RGB', (IMG_SIZE, IMG_SIZE), (0, 0, 0))
+            if self.transform:
+                image = self.transform(image)
+            return image, label
 
 def create_dataloaders():
-    """Create data loaders with proper train/test split."""
+    """Create data loaders with proper train/test split and class imbalance handling."""
 
-    # Training transforms with strong augmentation
+    # Training transforms with moderate augmentation
+    # Tuned to avoid confusing filtered real photos with AI-generated images
     train_transform = transforms.Compose([
         transforms.Resize((IMG_SIZE, IMG_SIZE)),
         transforms.RandomHorizontalFlip(p=0.5),
-        transforms.RandomRotation(15),
-        transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
-        transforms.RandomAffine(degrees=0, translate=(0.1, 0.1)),
+        transforms.RandomRotation(10),
+        # Gentle color jitter - preserves natural photo characteristics
+        # Reduced to avoid making real filtered photos look like AI artifacts
+        transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.05),
+        # Random grayscale at lower probability
+        transforms.RandomGrayscale(p=0.1),
+        # Slight affine transforms (natural camera variation)
+        transforms.RandomAffine(degrees=0, translate=(0.05, 0.05), scale=(0.95, 1.05)),
+        # Mild Gaussian blur (natural focus variation, not heavy filter simulation)
+        transforms.GaussianBlur(kernel_size=3, sigma=(0.1, 1.0)),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
@@ -80,136 +219,73 @@ def create_dataloaders():
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
 
-    # Load full dataset
-    full_dataset = ImageDataset(DATA_DIR, transform=None)
+    # Load train and test datasets from separate directories
+    # Balance train dataset by undersampling majority class
+    train_dataset = ImageDataset(DATA_DIR, transform=None, balance_classes=True)
+    test_dataset = ImageDataset(TEST_DIR, transform=None, balance_classes=False)  # Keep test set as-is
 
-    # Sample subset if MAX_TRAIN_SAMPLES is set
-    if MAX_TRAIN_SAMPLES and len(full_dataset) > MAX_TRAIN_SAMPLES:
-        all_indices = list(range(len(full_dataset)))
-        np.random.seed(42)
-        np.random.shuffle(all_indices)
-        full_dataset_indices = all_indices[:MAX_TRAIN_SAMPLES]
-    else:
-        full_dataset_indices = list(range(len(full_dataset)))
+    # Count samples per class for class weight calculation
+    fake_count = sum(1 for _, label in train_dataset.samples if label == 0)
+    real_count = sum(1 for _, label in train_dataset.samples if label == 1)
+    total_count = fake_count + real_count
 
-    # Split into train (80%) and test (20%)
-    train_size = int(TRAIN_SPLIT * len(full_dataset_indices))
-    test_size = len(full_dataset_indices) - train_size
+    print(f"  - Train samples: {len(train_dataset)} (Fake: {fake_count:,}, Real: {real_count:,})")
+    print(f"  - Test samples: {len(test_dataset)}")
 
-    # Use indices for proper splitting
-    indices = list(range(len(full_dataset_indices)))
-    np.random.seed(42)
-    np.random.shuffle(indices)
-    train_indices = indices[:train_size]
-    test_indices = indices[train_size:]
+    # No class weights needed - dataset is now balanced
+    class_weights = torch.tensor([1.0, 1.0], dtype=torch.float32)
 
-    # Create train and test datasets with appropriate transforms
-    class TrainDataset(Dataset):
-        def __init__(self, indices, root_dir, transform):
-            self.indices = indices
-            self.root_dir = root_dir
-            self.transform = transform
-            self.class_to_idx = {'Fake': 0, 'Real': 1}
-            self.samples = []
-            for class_name, idx in self.class_to_idx.items():
-                class_dir = os.path.join(root_dir, class_name)
-                if os.path.exists(class_dir):
-                    for img_name in os.listdir(class_dir):
-                        img_path = os.path.join(class_dir, img_name)
-                        if img_name.lower().endswith(('.jpg', '.jpeg', '.png', '.bmp', '.webp')):
-                            self.samples.append((img_path, idx))
+    # Split train into train/val (90%/10%)
+    train_size = int(0.9 * len(train_dataset))
+    val_size = len(train_dataset) - train_size
 
-        def __len__(self):
-            return len(self.indices)
-
-        def __getitem__(self, idx):
-            img_path, label = self.samples[self.indices[idx]]
-            image = Image.open(img_path).convert('RGB')
-            if self.transform:
-                image = self.transform(image)
-            return image, label
-
-    class TestDataset(Dataset):
-        def __init__(self, indices, root_dir, transform):
-            self.indices = indices
-            self.root_dir = root_dir
-            self.transform = transform
-            self.class_to_idx = {'Fake': 0, 'Real': 1}
-            self.samples = []
-            for class_name, idx in self.class_to_idx.items():
-                class_dir = os.path.join(root_dir, class_name)
-                if os.path.exists(class_dir):
-                    for img_name in os.listdir(class_dir):
-                        img_path = os.path.join(class_dir, img_name)
-                        if img_name.lower().endswith(('.jpg', '.jpeg', '.png', '.bmp', '.webp')):
-                            self.samples.append((img_path, idx))
-
-        def __len__(self):
-            return len(self.indices)
-
-        def __getitem__(self, idx):
-            img_path, label = self.samples[self.indices[idx]]
-            image = Image.open(img_path).convert('RGB')
-            if self.transform:
-                image = self.transform(image)
-            return image, label
-
-    train_dataset = TrainDataset(train_indices, DATA_DIR, train_transform)
-    test_dataset = TestDataset(test_indices, DATA_DIR, test_transform)
-
-    # Split train into train/val (90%/10% of train set)
-    val_size = int(0.1 * len(train_dataset))
-    train_size = len(train_dataset) - val_size
     train_subset, val_subset = torch.utils.data.random_split(
         train_dataset, [train_size, val_size],
         generator=torch.Generator().manual_seed(42)
     )
 
-    # Wrap val_subset to apply test_transform
-    class ValDataset(Dataset):
-        def __init__(self, subset, transform):
-            self.subset = subset
-            self.transform = transform
+    # Create dataloaders with proper transforms
+    train_loader = DataLoader(
+        TrainDataset(train_subset.indices, DATA_DIR, train_transform),
+        batch_size=BATCH_SIZE, shuffle=True, num_workers=4, pin_memory=True
+    )
+    val_loader = DataLoader(
+        ValDataset(val_subset.indices, DATA_DIR, test_transform),
+        batch_size=BATCH_SIZE, shuffle=False, num_workers=4, pin_memory=True
+    )
+    test_loader = DataLoader(
+        TestDataset(list(range(len(test_dataset))), TEST_DIR, test_transform),
+        batch_size=BATCH_SIZE, shuffle=False, num_workers=4, pin_memory=True
+    )
 
-        def __len__(self):
-            return len(self.subset)
-
-        def __getitem__(self, idx):
-            img, label = self.subset[idx]
-            if self.transform:
-                img = self.transform(img)
-            return img, label
-
-    val_dataset = ValDataset(val_subset, test_transform)
-
-    # Create dataloaders
-    train_loader = DataLoader(train_subset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4, pin_memory=True)
-    val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=4, pin_memory=True)
-    test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=4, pin_memory=True)
-
-    return train_loader, val_loader, test_loader
+    return train_loader, val_loader, test_loader, class_weights
 
 def create_model():
     """
     Create a CNN model for deepfake detection.
     Uses transfer learning with MobileNetV2 for better feature extraction.
+    Improved architecture with deeper classifier head.
     """
-    # Load pretrained MobileNetV2
+    # Load pretrained MobileNetV2 with ImageNet weights
     model = models.mobilenet_v2(weights=models.MobileNet_V2_Weights.IMAGENET1K_V1)
 
     # Freeze base model initially
     for param in model.parameters():
         param.requires_grad = False
 
-    # Replace classifier
+    # Replace classifier with deeper head for better feature learning
     num_features = model.last_channel
     model.classifier = nn.Sequential(
         nn.Dropout(0.5),
-        nn.Linear(num_features, 128),
+        nn.Linear(num_features, 256),
         nn.ReLU(),
-        nn.BatchNorm1d(128),
+        nn.BatchNorm1d(256),
+        nn.Dropout(0.4),
+        nn.Linear(256, 64),
+        nn.ReLU(),
+        nn.BatchNorm1d(64),
         nn.Dropout(0.3),
-        nn.Linear(128, 2)  # Binary classification (2 classes)
+        nn.Linear(64, 2)  # Binary classification (2 classes)
     )
 
     return model
@@ -226,7 +302,7 @@ def train_epoch(model, loader, criterion, optimizer, device, scaler=None):
 
         optimizer.zero_grad()
         if scaler is not None:
-            with autocast():
+            with torch.amp.autocast('cuda'):
                 outputs = model(images)
                 loss = criterion(outputs, labels)
             scaler.scale(loss).backward()
@@ -275,21 +351,20 @@ def train_model():
 
     # Create dataloaders
     print("\n[1/4] Loading dataset...")
-    train_loader, val_loader, test_loader = create_dataloaders()
+    train_loader, val_loader, test_loader, class_weights = create_dataloaders()
 
     print(f"  - Training batches: {len(train_loader)}")
     print(f"  - Validation batches: {len(val_loader)}")
     print(f"  - Test batches: {len(test_loader)}")
     print(f"  - Image size: {IMG_SIZE}x{IMG_SIZE}")
     print(f"  - Batch size: {BATCH_SIZE}")
-    print(f"  - Train/Val/Test split: {int(TRAIN_SPLIT*100)}%/{int((1-TRAIN_SPLIT)*100)}%/{int((1-TRAIN_SPLIT)*100)}%")
 
     # Create model
     print("\n[2/4] Creating model...")
     model = create_model().to(DEVICE)
 
-    # Loss and optimizer
-    criterion = nn.CrossEntropyLoss()
+    # Loss and optimizer - use class weights for imbalanced dataset
+    criterion = nn.CrossEntropyLoss(weight=class_weights.to(DEVICE))
     optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-4)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS)
     scaler = GradScaler() if torch.cuda.is_available() else None
@@ -301,6 +376,7 @@ def train_model():
     }
 
     best_val_acc = 0.0
+    best_val_loss = float('inf')
     patience_counter = 0
     max_patience = 5
 
@@ -314,10 +390,15 @@ def train_model():
             optimizer = optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=1e-4)
             print("  [Unfreezing] Last 10 backbone layers")
         if epoch == 5:
-            for param in model.features[-15:].parameters():
+            for param in model.features[-20:].parameters():
+                param.requires_grad = True
+            optimizer = optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=5e-5)
+            print("  [Unfreezing] Last 20 backbone layers")
+        if epoch == 10:
+            for param in model.features.parameters():
                 param.requires_grad = True
             optimizer = optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=1e-5)
-            print("  [Unfreezing] Last 15 backbone layers")
+            print("  [Unfreezing] All backbone layers")
 
         print(f"\nEpoch {epoch+1}/{EPOCHS}")
         train_loss, train_acc = train_epoch(model, train_loader, criterion, optimizer, DEVICE, scaler)
@@ -339,15 +420,20 @@ def train_model():
             torch.save(model.state_dict(), 'models/best_model.pth')
             print(f"  [Saved] Best model with val_acc: {val_acc:.2f}%")
 
+        # Early stopping: stop if val_acc is 100% (no room for improvement)
+        if val_acc >= 99.99:
+            print("Early stopping triggered (validation accuracy saturated at ~100%)")
+            break
+
         # Early stopping based on validation loss plateau
-        if len(history['val_loss']) > 5:
-            if val_loss >= min(history['val_loss'][-5:]):
-                patience_counter += 1
-                if patience_counter >= max_patience:
-                    print("Early stopping triggered")
-                    break
-            else:
-                patience_counter = 0
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            patience_counter = 0  # Reset on any improvement
+        else:
+            patience_counter += 1
+            if patience_counter >= max_patience:
+                print(f"Early stopping triggered (no improvement for {max_patience} epochs)")
+                break
 
     # Load best model
     model.load_state_dict(torch.load('models/best_model.pth', weights_only=True))
@@ -430,8 +516,8 @@ def main():
 
     # Save final model
     os.makedirs('models', exist_ok=True)
-    torch.save(model.state_dict(), 'models/deepfake_detector.pth')
-    print("\nModel saved to: models/deepfake_detector.pth")
+    torch.save(model.state_dict(), 'models/fine_tuned_model.pth')
+    print("\nModel saved to: models/fine_tuned_model.pth")
 
     # Plot history
     plot_training_history(history)
