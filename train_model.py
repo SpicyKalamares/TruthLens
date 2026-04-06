@@ -35,6 +35,9 @@ DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 # Class imbalance handling
 USE_CLASS_WEIGHTS = True  # Use weighted loss to handle imbalance
 
+# Label smoothing to prevent overconfident predictions
+LABEL_SMOOTHING = 0.1  # Prevents model from becoming too confident
+
 # Enable cuDNN benchmarking for faster training
 if torch.cuda.is_available():
     torch.backends.cudnn.benchmark = True
@@ -247,15 +250,15 @@ def create_dataloaders():
     # Create dataloaders with proper transforms
     train_loader = DataLoader(
         TrainDataset(train_subset.indices, DATA_DIR, train_transform),
-        batch_size=BATCH_SIZE, shuffle=True, num_workers=4, pin_memory=True
+        batch_size=BATCH_SIZE, shuffle=True, num_workers=0, pin_memory=True
     )
     val_loader = DataLoader(
         ValDataset(val_subset.indices, DATA_DIR, test_transform),
-        batch_size=BATCH_SIZE, shuffle=False, num_workers=4, pin_memory=True
+        batch_size=BATCH_SIZE, shuffle=False, num_workers=0, pin_memory=True
     )
     test_loader = DataLoader(
         TestDataset(list(range(len(test_dataset))), TEST_DIR, test_transform),
-        batch_size=BATCH_SIZE, shuffle=False, num_workers=4, pin_memory=True
+        batch_size=BATCH_SIZE, shuffle=False, num_workers=0, pin_memory=True
     )
 
     return train_loader, val_loader, test_loader, class_weights
@@ -364,7 +367,8 @@ def train_model():
     model = create_model().to(DEVICE)
 
     # Loss and optimizer - use class weights for imbalanced dataset
-    criterion = nn.CrossEntropyLoss(weight=class_weights.to(DEVICE))
+    # Label smoothing prevents overconfident predictions
+    criterion = nn.CrossEntropyLoss(weight=class_weights.to(DEVICE), label_smoothing=LABEL_SMOOTHING)
     optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-4)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS)
     scaler = GradScaler() if torch.cuda.is_available() else None
@@ -420,9 +424,9 @@ def train_model():
             torch.save(model.state_dict(), 'models/best_model.pth')
             print(f"  [Saved] Best model with val_acc: {val_acc:.2f}%")
 
-        # Early stopping: stop if val_acc is 100% (no room for improvement)
-        if val_acc >= 99.99:
-            print("Early stopping triggered (validation accuracy saturated at ~100%)")
+        # Early stopping: stop if val_acc is 99.95%+ (model has converged)
+        if val_acc >= 99.95 and epoch >= 5:
+            print("Early stopping triggered (validation accuracy saturated)")
             break
 
         # Early stopping based on validation loss plateau

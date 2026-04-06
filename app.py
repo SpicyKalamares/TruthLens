@@ -13,6 +13,9 @@ import numpy as np
 from pathlib import Path
 import io
 
+# Haar cascade for face detection
+FACE_CASCADE = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+
 # Configuration
 IMG_SIZE = 224
 MODEL_PATH = 'models/fine_tuned_model.pth'  # Use fine-tuned model
@@ -29,6 +32,39 @@ if torch.cuda.is_available():
 TTA_TRANSFORMS = 10  # More augments = smoother averaging
 
 
+def detect_and_crop_face(image: Image.Image) -> Image.Image:
+    """Detect face in image and crop to face region, resize to 256x256."""
+    # Convert PIL to OpenCV format
+    img_cv = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+
+    # Detect faces
+    gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
+    faces = FACE_CASCADE.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
+
+    if len(faces) > 0:
+        # Get largest face
+        x, y, w, h = max(faces, key=lambda f: f[2] * f[3])
+
+        # Add padding around face
+        pad = int(max(w, h) * 0.2)
+        x1 = max(0, x - pad)
+        y1 = max(0, y - pad)
+        x2 = min(img_cv.shape[1], x + w + pad)
+        y2 = min(img_cv.shape[0], y + h + pad)
+
+        # Crop and resize to 256x256 (matching training data)
+        face_crop = img_cv[y1:y2, x1:x2]
+        face_crop = cv2.resize(face_crop, (256, 256), interpolation=cv2.INTER_AREA)
+
+        # Convert back to PIL
+        face_crop = cv2.cvtColor(face_crop, cv2.COLOR_BGR2RGB)
+        return Image.fromarray(face_crop)
+
+    # No face detected - resize whole image to 256x256
+    image.thumbnail((256, 256), Image.Resampling.LANCZOS)
+    return image
+
+
 @st.cache_resource
 def load_model():
     """Load and cache the model."""
@@ -40,11 +76,15 @@ def load_model():
     num_features = model.last_channel
     model.classifier = nn.Sequential(
         nn.Dropout(0.5),
-        nn.Linear(num_features, 128),
+        nn.Linear(num_features, 256),
         nn.ReLU(),
-        nn.BatchNorm1d(128),
+        nn.BatchNorm1d(256),
+        nn.Dropout(0.4),
+        nn.Linear(256, 64),
+        nn.ReLU(),
+        nn.BatchNorm1d(64),
         nn.Dropout(0.3),
-        nn.Linear(128, 2)
+        nn.Linear(64, 2)
     )
     model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE, weights_only=True))
     model.to(DEVICE)
@@ -140,6 +180,9 @@ def predict_image_tta(model, image_bytes):
     """Predict if an image is REAL or FAKE using TTA."""
     image = Image.open(io.BytesIO(image_bytes)).convert('RGB')
 
+    # Crop to face and resize to 256x256 (matching training data)
+    image = detect_and_crop_face(image)
+
     # Accumulate predictions across TTA transforms
     all_probs = []
     for i in range(TTA_TRANSFORMS):
@@ -157,15 +200,21 @@ def predict_image_tta(model, image_bytes):
     fake_prob = avg_probs[0].item()
     real_prob = avg_probs[1].item()
 
-    # Standard threshold (fine-tuned model should work better)
-    FAKE_THRESHOLD = 0.50  # Classify as Fake if fake_prob > 50%
+    # Adjusted threshold to reduce False Fake predictions
+    FAKE_THRESHOLD = 0.80  # Classify as Fake only if fake_prob > 80%
     class_name = 'Fake' if fake_prob > FAKE_THRESHOLD else 'Real'
+
+    # Debug: log probabilities
+    print(f"[DEBUG] fake_prob={fake_prob:.4f}, real_prob={real_prob:.4f}, predicted={class_name}")
 
     return class_name, confidence.item(), fake_prob, real_prob
 
 
 def predict_video_frame_tta(model, frame):
     """Predict a single video frame using TTA."""
+    # Crop to face and resize to 256x256 (matching training data)
+    face_crop = detect_and_crop_face(Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)))
+    frame = cv2.cvtColor(np.array(face_crop), cv2.COLOR_RGB2BGR)
     image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
 
     all_probs = []
@@ -183,9 +232,12 @@ def predict_video_frame_tta(model, frame):
     fake_prob = avg_probs[0].item()
     real_prob = avg_probs[1].item()
 
-    # Standard threshold (fine-tuned model should work better)
-    FAKE_THRESHOLD = 0.50  # Classify as Fake if fake_prob > 50%
+    # Adjusted threshold to reduce False Fake predictions
+    FAKE_THRESHOLD = 0.80  # Classify as Fake only if fake_prob > 80%
     class_name = 'Fake' if fake_prob > FAKE_THRESHOLD else 'Real'
+
+    # Debug: log probabilities
+    print(f"[DEBUG] fake_prob={fake_prob:.4f}, real_prob={real_prob:.4f}, predicted={class_name}")
 
     return class_name, confidence.item(), fake_prob, real_prob
 
