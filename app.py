@@ -16,9 +16,30 @@ import io
 # Haar cascade for face detection
 FACE_CASCADE = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
 
+# Load config for model settings
+def load_config():
+    """Load model configuration from config.json."""
+    import json
+    config_path = Path('config.json')
+    default_config = {
+        'model_path': 'models/fine_tuned_model.pth',
+        'model_architecture': 'MobileNetV2',
+        'image_size': 224,
+        'recommended_threshold_fp5': 0.94,
+        'recommended_threshold_fp3': 0.94
+    }
+    if config_path.exists():
+        with open(config_path) as f:
+            config = json.load(f)
+        # Merge with defaults
+        return {**default_config, **config}
+    return default_config
+
+CONFIG = load_config()
+
 # Configuration
-IMG_SIZE = 224
-MODEL_PATH = 'models/fine_tuned_model.pth'  # Use fine-tuned model
+IMG_SIZE = CONFIG['image_size']
+MODEL_PATH = CONFIG['model_path']
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 # Ensure deterministic behavior
@@ -30,6 +51,15 @@ if torch.cuda.is_available():
 
 # Test-Time Augmentation settings
 TTA_TRANSFORMS = 10  # More augments = smoother averaging
+
+# Load calibrated threshold from config
+def load_threshold():
+    """Load decision threshold from config.json."""
+    # Prefer fp3 threshold, fall back to fp5, then default
+    threshold = CONFIG.get('recommended_threshold_fp3') or CONFIG.get('recommended_threshold_fp5') or 0.94
+    return threshold
+
+FAKE_THRESHOLD = load_threshold()
 
 
 def detect_and_crop_face(image: Image.Image) -> Image.Image:
@@ -67,25 +97,50 @@ def detect_and_crop_face(image: Image.Image) -> Image.Image:
 
 @st.cache_resource
 def load_model():
-    """Load and cache the model."""
+    """Load and cache the model. Auto-detects architecture from config."""
+    import json
     # Ensure deterministic behavior
     torch.manual_seed(42)
     np.random.seed(42)
 
-    model = models.mobilenet_v2(weights=None)
-    num_features = model.last_channel
-    model.classifier = nn.Sequential(
-        nn.Dropout(0.5),
-        nn.Linear(num_features, 256),
-        nn.ReLU(),
-        nn.BatchNorm1d(256),
-        nn.Dropout(0.4),
-        nn.Linear(256, 64),
-        nn.ReLU(),
-        nn.BatchNorm1d(64),
-        nn.Dropout(0.3),
-        nn.Linear(64, 2)
-    )
+    # Load config to determine model architecture
+    config_path = Path('config.json')
+    architecture = 'MobileNetV2'  # Default
+    img_size = 224
+
+    if config_path.exists():
+        with open(config_path) as f:
+            config = json.load(f)
+        architecture = config.get('model_architecture', 'MobileNetV2')
+        img_size = config.get('image_size', 224)
+
+    if architecture == 'EfficientNet-B3':
+        model = models.efficientnet_b3(weights=None)
+        num_features = model.classifier[1].in_features
+        model.classifier = nn.Sequential(
+            nn.Dropout(0.5),
+            nn.Linear(num_features, 256),
+            nn.ReLU(),
+            nn.BatchNorm1d(256),
+            nn.Dropout(0.3),
+            nn.Linear(256, 2)
+        )
+    else:
+        model = models.mobilenet_v2(weights=None)
+        num_features = model.last_channel
+        model.classifier = nn.Sequential(
+            nn.Dropout(0.5),
+            nn.Linear(num_features, 256),
+            nn.ReLU(),
+            nn.BatchNorm1d(256),
+            nn.Dropout(0.4),
+            nn.Linear(256, 64),
+            nn.ReLU(),
+            nn.BatchNorm1d(64),
+            nn.Dropout(0.3),
+            nn.Linear(64, 2)
+        )
+
     model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE, weights_only=True))
     model.to(DEVICE)
     model.eval()
@@ -200,12 +255,8 @@ def predict_image_tta(model, image_bytes):
     fake_prob = avg_probs[0].item()
     real_prob = avg_probs[1].item()
 
-    # Adjusted threshold to reduce False Fake predictions
-    FAKE_THRESHOLD = 0.80  # Classify as Fake only if fake_prob > 80%
+    # Use calibrated threshold from config (default 0.94 for ~2.4% false positive rate)
     class_name = 'Fake' if fake_prob > FAKE_THRESHOLD else 'Real'
-
-    # Debug: log probabilities
-    print(f"[DEBUG] fake_prob={fake_prob:.4f}, real_prob={real_prob:.4f}, predicted={class_name}")
 
     return class_name, confidence.item(), fake_prob, real_prob
 
@@ -232,12 +283,8 @@ def predict_video_frame_tta(model, frame):
     fake_prob = avg_probs[0].item()
     real_prob = avg_probs[1].item()
 
-    # Adjusted threshold to reduce False Fake predictions
-    FAKE_THRESHOLD = 0.80  # Classify as Fake only if fake_prob > 80%
+    # Use calibrated threshold from config (default 0.94 for ~2.4% false positive rate)
     class_name = 'Fake' if fake_prob > FAKE_THRESHOLD else 'Real'
-
-    # Debug: log probabilities
-    print(f"[DEBUG] fake_prob={fake_prob:.4f}, real_prob={real_prob:.4f}, predicted={class_name}")
 
     return class_name, confidence.item(), fake_prob, real_prob
 
