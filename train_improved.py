@@ -27,13 +27,14 @@ ImageFile.LOAD_TRUNCATED_IMAGES = True
 Image.MAX_IMAGE_PIXELS = None
 
 # Configuration
-IMG_SIZE = 300  # EfficientNet-B3 native resolution
-BATCH_SIZE = 32
-EPOCHS = 25
-LEARNING_RATE = 0.0005
+IMG_SIZE = 224  # Reduced from 300 - still great for EfficientNet-B3, much faster
+BATCH_SIZE = 64  # Increased - EfficientNet-B3 can handle it
+EPOCHS = 20  # Reduced - faster convergence with larger batch
+LEARNING_RATE = 0.001  # Increased for larger batch size
 DATA_DIR = 'Dataset/train'
 TEST_DIR = 'Dataset/test'
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+NUM_WORKERS = 4  # Multi-threaded data loading
 
 # Label smoothing for better calibration
 LABEL_SMOOTHING = 0.1
@@ -180,16 +181,13 @@ def create_model():
 def create_dataloaders():
     """Create data loaders with strong augmentation."""
 
-    # Stronger augmentation for better generalization
+    # Faster augmentation (removed expensive GaussianBlur, simplified)
     train_transform = transforms.Compose([
-        transforms.Resize((IMG_SIZE + 32, IMG_SIZE + 32)),
+        transforms.Resize((IMG_SIZE + 20, IMG_SIZE + 20)),
         transforms.RandomCrop((IMG_SIZE, IMG_SIZE)),
         transforms.RandomHorizontalFlip(p=0.5),
-        transforms.RandomRotation(15),
-        transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3, hue=0.1),
-        transforms.RandomGrayscale(p=0.15),
-        transforms.RandomAffine(degrees=0, translate=(0.1, 0.1), scale=(0.9, 1.1)),
-        transforms.GaussianBlur(kernel_size=5, sigma=(0.1, 2.0)),
+        transforms.RandomRotation(10),
+        transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.05),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
@@ -220,15 +218,15 @@ def create_dataloaders():
     # Create dataloaders
     train_loader = DataLoader(
         TrainDataset(train_subset.indices, DATA_DIR, train_transform),
-        batch_size=BATCH_SIZE, shuffle=True, num_workers=0, pin_memory=True
+        batch_size=BATCH_SIZE, shuffle=True, num_workers=NUM_WORKERS, pin_memory=True
     )
     val_loader = DataLoader(
         ValDataset(val_subset.indices, DATA_DIR, test_transform),
-        batch_size=BATCH_SIZE, shuffle=False, num_workers=0, pin_memory=True
+        batch_size=BATCH_SIZE, shuffle=False, num_workers=NUM_WORKERS, pin_memory=True
     )
     test_loader = DataLoader(
         ValDataset(list(range(len(test_dataset))), TEST_DIR, test_transform),
-        batch_size=BATCH_SIZE, shuffle=False, num_workers=0, pin_memory=True
+        batch_size=BATCH_SIZE, shuffle=False, num_workers=NUM_WORKERS, pin_memory=True
     )
 
     return train_loader, val_loader, test_loader
@@ -360,6 +358,20 @@ def train_model():
     best_model_state = None
     patience_counter = 0
     max_patience = 7
+    start_epoch = 0
+
+    # Load checkpoint if exists (resume training)
+    checkpoint_path = 'models/checkpoint.pth'
+    if os.path.exists(checkpoint_path):
+        print(f"\n[RESUMING] Loading checkpoint from {checkpoint_path}...")
+        checkpoint = torch.load(checkpoint_path, weights_only=True)
+        model.load_state_dict(checkpoint['model_state'])
+        optimizer.load_state_dict(checkpoint['optimizer_state'])
+        scheduler.load_state_dict(checkpoint['scheduler_state'])
+        start_epoch = checkpoint['epoch']
+        best_val_acc = checkpoint['best_val_acc']
+        history = checkpoint['history']
+        print(f"  Resuming from epoch {start_epoch + 1}, best_val_acc: {best_val_acc:.2f}%")
 
     # Train with gradual unfreezing
     print(f"\n[3/4] Training for {EPOCHS} epochs...")
@@ -401,6 +413,17 @@ def train_model():
             os.makedirs('models', exist_ok=True)
             torch.save(best_model_state, 'models/best_model.pth')
             print(f"  [Saved] Best model with val_acc: {val_acc:.2f}%")
+
+        # Save checkpoint every epoch (for resume capability)
+        checkpoint = {
+            'epoch': epoch,
+            'model_state': model.state_dict(),
+            'optimizer_state': optimizer.state_dict(),
+            'scheduler_state': scheduler.state_dict(),
+            'best_val_acc': best_val_acc,
+            'history': history
+        }
+        torch.save(checkpoint, checkpoint_path)
 
         # Early stopping
         if val_acc >= 99.5 and epoch >= 10:

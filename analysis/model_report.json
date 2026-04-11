@@ -1,0 +1,46 @@
+{
+  "model_path": "models/fine_tuned_model.pth",
+  "test_samples": 11415,
+  "accuracy": 96.94261936049058,
+  "fake_accuracy": 99.91666666666667,
+  "real_accuracy": 93.64727608494921,
+  "confusion_matrix": [
+    [
+      5995,
+      5
+    ],
+    [
+      344,
+      5071
+    ]
+  ],
+  "false_negative_rate": 0.08333333333333334,
+  "false_positive_rate": 6.3527239150507855,
+  "classification_report": {
+    "Fake": {
+      "precision": 0.9457327654204133,
+      "recall": 0.9991666666666666,
+      "f1-score": 0.9717156981927223,
+      "support": 6000.0
+    },
+    "Real": {
+      "precision": 0.9990149724192278,
+      "recall": 0.9364727608494922,
+      "f1-score": 0.9667333905252121,
+      "support": 5415.0
+    },
+    "accuracy": 0.9694261936049058,
+    "macro avg": {
+      "precision": 0.9723738689198205,
+      "recall": 0.9678197137580794,
+      "f1-score": 0.9692245443589672,
+      "support": 11415.0
+    },
+    "weighted avg": {
+      "precision": 0.9710085561255014,
+      "recall": 0.9694261936049058,
+      "f1-score": 0.9693522119010388,
+      "support": 11415.0
+    }
+  }
+}
