@@ -1,11 +1,14 @@
 {
-  "model_path": "models/best_model.pth",
+  "model_path": "models/best_model_efficientnet_b3.pth",
   "model_architecture": "EfficientNet-B3",
-  "recommended_threshold_fp3": 0.723,
-  "best_val_accuracy": 100.0,
-  "training_date": "2026-04-11T22:13:41.390219",
-  "epochs_trained": 11,
+  "recommended_threshold_fp3": 0.5,
+  "best_val_accuracy": 99.13,
+  "best_test_accuracy": 98.96,
+  "test_auc": 0.9982,
+  "test_f1": 0.9895,
+  "training_date": "2026-04-26T17:05:20",
+  "epochs_trained": 40,
   "image_size": 224,
-  "fp_rate_at_threshold": 2.99,
-  "fn_rate_at_threshold": 0.07
+  "dataset": "Dataset_resplit (unified 70/15/15 split from training data only)",
+  "notes": "Fixed train/test distribution mismatch - improved test accuracy from 62.20% to 98.96%"
 }

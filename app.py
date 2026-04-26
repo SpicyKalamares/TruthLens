@@ -12,6 +12,8 @@ import cv2
 import numpy as np
 from pathlib import Path
 import io
+import tempfile
+import os
 
 # Haar cascade for face detection
 FACE_CASCADE = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
@@ -105,45 +107,83 @@ def load_model():
 
     # Load config to determine model architecture
     config_path = Path('config.json')
-    architecture = 'MobileNetV2'  # Default
+    config_dual_path = Path('config_dual.json')
+    architecture = 'EfficientNet-B3'  # Default to current trained model
     img_size = 224
+    model_type = 'standard'  # 'standard' or 'dual_input'
 
+    # Load standard config FIRST (priority to current model)
     if config_path.exists():
         with open(config_path) as f:
             config = json.load(f)
-        architecture = config.get('model_architecture', 'MobileNetV2')
+        architecture = config.get('model_architecture', 'EfficientNet-B3')
         img_size = config.get('image_size', 224)
 
-    if architecture == 'EfficientNet-B3':
-        model = models.efficientnet_b3(weights=None)
-        num_features = model.classifier[1].in_features
-        model.classifier = nn.Sequential(
-            nn.Dropout(0.5),
-            nn.Linear(num_features, 256),
-            nn.ReLU(),
-            nn.BatchNorm1d(256),
-            nn.Dropout(0.3),
-            nn.Linear(256, 2)
-        )
-    else:
-        model = models.mobilenet_v2(weights=None)
-        num_features = model.last_channel
-        model.classifier = nn.Sequential(
-            nn.Dropout(0.5),
-            nn.Linear(num_features, 256),
-            nn.ReLU(),
-            nn.BatchNorm1d(256),
-            nn.Dropout(0.4),
-            nn.Linear(256, 64),
-            nn.ReLU(),
-            nn.BatchNorm1d(64),
-            nn.Dropout(0.3),
-            nn.Linear(64, 2)
-        )
+    # Only try dual input config if standard config specifies it
+    if architecture == 'DualInputDetector' and config_dual_path.exists():
+        with open(config_dual_path) as f:
+            config_dual = json.load(f)
+        model_type = 'dual_input'
+        img_size = config_dual.get('data', {}).get('image_size', 224)
 
-    model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE, weights_only=True))
+    if model_type == 'dual_input':
+        # Import and create DualInputDetector
+        try:
+            from models import DualInputDetector
+            model = DualInputDetector(
+                spatial_dim=512,
+                fft_dim=256,
+                dct_dim=256,
+                image_size=img_size,
+                use_attention=False,
+                fusion_type='standard',
+            )
+            # Load checkpoint with full state
+            checkpoint = torch.load(MODEL_PATH, map_location=DEVICE)
+            if isinstance(checkpoint, dict) and 'model_state' in checkpoint:
+                model.load_state_dict(checkpoint['model_state'])
+            else:
+                model.load_state_dict(checkpoint)
+        except Exception as e:
+            st.error(f"Failed to load DualInputDetector: {e}. Falling back to standard model.")
+            model_type = 'standard'
+    
+    if model_type != 'dual_input':
+        # Standard models (EfficientNet-B3, MobileNetV2)
+        if architecture == 'EfficientNet-B3':
+            model = models.efficientnet_b3(weights=None)
+            num_features = model.classifier[1].in_features
+            # Binary classification with sigmoid (single output)
+            model.classifier[1] = nn.Linear(num_features, 1)
+        else:
+            model = models.mobilenet_v2(weights=None)
+            num_features = model.last_channel
+            model.classifier = nn.Sequential(
+                nn.Dropout(0.5),
+                nn.Linear(num_features, 256),
+                nn.ReLU(),
+                nn.BatchNorm1d(256),
+                nn.Dropout(0.4),
+                nn.Linear(256, 64),
+                nn.ReLU(),
+                nn.BatchNorm1d(64),
+                nn.Dropout(0.3),
+                nn.Linear(64, 2)
+            )
+
+        # Load checkpoint (handle both checkpoint dict and state dict)
+        checkpoint = torch.load(MODEL_PATH, map_location=DEVICE)
+        if isinstance(checkpoint, dict) and 'model_state' in checkpoint:
+            model.load_state_dict(checkpoint['model_state'])
+        else:
+            model.load_state_dict(checkpoint)
+
     model.to(DEVICE)
     model.eval()
+    
+    # Store model type in streamlit session state for inference
+    st.session_state.model_type = model_type
+    
     return model
 
 
@@ -238,6 +278,9 @@ def predict_image_tta(model, image_bytes):
     # Crop to face and resize to 256x256 (matching training data)
     image = detect_and_crop_face(image)
 
+    # Check if using dual-input model
+    model_type = getattr(st.session_state, 'model_type', 'standard')
+
     # Accumulate predictions across TTA transforms
     all_probs = []
     for i in range(TTA_TRANSFORMS):
@@ -246,19 +289,44 @@ def predict_image_tta(model, image_bytes):
 
         with torch.no_grad():
             outputs = model(img_tensor)
-            probs = torch.softmax(outputs, dim=1)[0]
+            
+            if model_type == 'dual_input':
+                # Dual-input model outputs binary logit (shape: 1, 1)
+                probs = torch.sigmoid(outputs.squeeze(-1))
+                # Convert to [fake_prob, real_prob] format for compatibility
+                fake_prob = probs.item()
+                real_prob = 1.0 - fake_prob
+                probs = torch.tensor([fake_prob, real_prob])
+            elif outputs.shape[-1] == 1:
+                # EfficientNet-B3: binary sigmoid output
+                sigmoid_prob = torch.sigmoid(outputs.squeeze(-1))
+                fake_prob = sigmoid_prob.item()
+                real_prob = 1.0 - fake_prob
+                probs = torch.tensor([fake_prob, real_prob])
+            else:
+                # Standard models output softmax with shape (1, 2)
+                probs = torch.softmax(outputs, dim=1)[0]
+            
             all_probs.append(probs)
 
     # Average probabilities
     avg_probs = torch.stack(all_probs).mean(dim=0)
-    confidence, predicted = torch.max(avg_probs, 0)
-    fake_prob = avg_probs[0].item()
-    real_prob = avg_probs[1].item()
+    
+    if model_type == 'dual_input' or (isinstance(avg_probs, torch.Tensor) and len(avg_probs) == 2):
+        # For dual-input or binary: avg_probs = [fake_prob, real_prob]
+        fake_prob = avg_probs[0].item()
+        real_prob = avg_probs[1].item()
+        confidence = max(fake_prob, real_prob)
+    else:
+        # For standard softmax: avg_probs = [fake_prob, real_prob] from softmax
+        confidence, predicted = torch.max(avg_probs, 0)
+        fake_prob = avg_probs[0].item()
+        real_prob = avg_probs[1].item()
 
-    # Use calibrated threshold from config (default 0.94 for ~2.4% false positive rate)
+    # Use calibrated threshold from config (default 0.5 for binary sigmoid)
     class_name = 'Fake' if fake_prob > FAKE_THRESHOLD else 'Real'
 
-    return class_name, confidence.item(), fake_prob, real_prob
+    return class_name, confidence, fake_prob, real_prob
 
 
 def predict_video_frame_tta(model, frame):
@@ -268,6 +336,9 @@ def predict_video_frame_tta(model, frame):
     frame = cv2.cvtColor(np.array(face_crop), cv2.COLOR_RGB2BGR)
     image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
 
+    # Check if using dual-input model
+    model_type = getattr(st.session_state, 'model_type', 'standard')
+
     all_probs = []
     for i in range(TTA_TRANSFORMS):
         transform = get_transform(i)
@@ -275,18 +346,43 @@ def predict_video_frame_tta(model, frame):
 
         with torch.no_grad():
             outputs = model(img_tensor)
-            probs = torch.softmax(outputs, dim=1)[0]
+            
+            if model_type == 'dual_input':
+                # Dual-input model outputs binary logit (shape: 1, 1)
+                probs = torch.sigmoid(outputs.squeeze(-1))
+                # Convert to [fake_prob, real_prob] format for compatibility
+                fake_prob = probs.item()
+                real_prob = 1.0 - fake_prob
+                probs = torch.tensor([fake_prob, real_prob])
+            elif outputs.shape[-1] == 1:
+                # EfficientNet-B3: binary sigmoid output
+                sigmoid_prob = torch.sigmoid(outputs.squeeze(-1))
+                fake_prob = sigmoid_prob.item()
+                real_prob = 1.0 - fake_prob
+                probs = torch.tensor([fake_prob, real_prob])
+            else:
+                # Standard models output softmax with shape (1, 2)
+                probs = torch.softmax(outputs, dim=1)[0]
+            
             all_probs.append(probs)
 
     avg_probs = torch.stack(all_probs).mean(dim=0)
-    confidence, predicted = torch.max(avg_probs, 0)
-    fake_prob = avg_probs[0].item()
-    real_prob = avg_probs[1].item()
+    
+    if model_type == 'dual_input' or len(avg_probs) == 2:
+        # For dual-input or binary: avg_probs = [fake_prob, real_prob]
+        fake_prob = avg_probs[0].item()
+        real_prob = avg_probs[1].item()
+        confidence = max(fake_prob, real_prob)
+    else:
+        # For standard softmax: avg_probs = [fake_prob, real_prob] from softmax
+        confidence, predicted = torch.max(avg_probs, 0)
+        fake_prob = avg_probs[0].item()
+        real_prob = avg_probs[1].item()
 
-    # Use calibrated threshold from config (default 0.94 for ~2.4% false positive rate)
+    # Use calibrated threshold from config (default 0.5 for binary sigmoid)
     class_name = 'Fake' if fake_prob > FAKE_THRESHOLD else 'Real'
 
-    return class_name, confidence.item(), fake_prob, real_prob
+    return class_name, confidence, fake_prob, real_prob
 
 
 def main():
@@ -320,76 +416,84 @@ def main():
         is_video = 'video' in file_type or uploaded_file.name.endswith(('.mp4', '.avi', '.mov', '.mkv'))
 
         if is_video:
-            # Video processing
-            tfile = io.BytesIO(uploaded_file.read())
-            cap = cv2.VideoCapture(tfile)
+            # Video processing - save to temporary file since cv2.VideoCapture needs a file path
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.mp4') as temp_video:
+                temp_video.write(uploaded_file.read())
+                temp_video_path = temp_video.name
+            
+            try:
+                cap = cv2.VideoCapture(temp_video_path)
 
-            if not cap.isOpened():
-                st.error("Could not open video file")
-                return
+                if not cap.isOpened():
+                    st.error("Could not open video file")
+                    return
 
-            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-            frame_interval = max(1, total_frames // 60)  # Analyze up to 60 frames for better consistency
+                total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                frame_interval = max(1, total_frames // 60)  # Analyze up to 60 frames for better consistency
 
-            fake_count = 0
-            real_count = 0
-            progress_bar = st.progress(0)
+                fake_count = 0
+                real_count = 0
+                progress_bar = st.progress(0)
 
-            st.markdown("**Analyzing video frames...**")
+                st.markdown("**Analyzing video frames...**")
 
-            frame_count = 0
-            analyzed = 0
-            all_fake_probs = []  # Store all probabilities for smoothing
+                frame_count = 0
+                analyzed = 0
+                all_fake_probs = []  # Store all probabilities for smoothing
 
-            while True:
-                ret, frame = cap.read()
-                if not ret:
-                    break
+                while True:
+                    ret, frame = cap.read()
+                    if not ret:
+                        break
 
-                if frame_count % frame_interval == 0:
-                    _, _, fake_prob, _ = predict_video_frame_tta(model, frame)
-                    all_fake_probs.append(fake_prob)
-                    analyzed += 1
-                    progress_bar.progress(analyzed / min(60, total_frames))
+                    if frame_count % frame_interval == 0:
+                        _, _, fake_prob, _ = predict_video_frame_tta(model, frame)
+                        all_fake_probs.append(fake_prob)
+                        analyzed += 1
+                        progress_bar.progress(analyzed / min(60, total_frames))
 
-                frame_count += 1
+                    frame_count += 1
 
-                if analyzed >= 60:
-                    break
+                    if analyzed >= 60:
+                        break
 
-            cap.release()
+                cap.release()
 
-            # Temporal smoothing: apply rolling average window
-            window_size = 5
-            smoothed_probs = []
-            for i in range(len(all_fake_probs)):
-                start = max(0, i - window_size // 2)
-                end = min(len(all_fake_probs), i + window_size // 2 + 1)
-                smoothed_probs.append(sum(all_fake_probs[start:end]) / len(all_fake_probs[start:end]))
+                # Temporal smoothing: apply rolling average window
+                window_size = 5
+                smoothed_probs = []
+                for i in range(len(all_fake_probs)):
+                    start = max(0, i - window_size // 2)
+                    end = min(len(all_fake_probs), i + window_size // 2 + 1)
+                    smoothed_probs.append(sum(all_fake_probs[start:end]) / len(all_fake_probs[start:end]))
 
-            # Count smoothed predictions
-            for prob in smoothed_probs:
-                if prob > 0.5:
-                    fake_count += 1
+                # Count smoothed predictions
+                for prob in smoothed_probs:
+                    if prob > 0.5:
+                        fake_count += 1
+                    else:
+                        real_count += 1
+
+                total = fake_count + real_count
+                fake_ratio = fake_count / total if total > 0 else 0
+
+                st.markdown("---")
+                st.markdown("### Results")
+
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.metric("FAKE frames", fake_count)
+                with col2:
+                    st.metric("REAL frames", real_count)
+
+                if fake_ratio > 0.5:
+                    st.error(f"**Video classified as: FAKE** ({fake_ratio:.1%} AI-generated frames)")
                 else:
-                    real_count += 1
-
-            total = fake_count + real_count
-            fake_ratio = fake_count / total if total > 0 else 0
-
-            st.markdown("---")
-            st.markdown("### Results")
-
-            col1, col2 = st.columns(2)
-            with col1:
-                st.metric("FAKE frames", fake_count)
-            with col2:
-                st.metric("REAL frames", real_count)
-
-            if fake_ratio > 0.5:
-                st.error(f"**Video classified as: FAKE** ({fake_ratio:.1%} AI-generated frames)")
-            else:
-                st.success(f"**Video classified as: REAL** ({(1-fake_ratio):.1%} authentic frames)")
+                    st.success(f"**Video classified as: REAL** ({(1-fake_ratio):.1%} authentic frames)")
+            finally:
+                # Clean up temporary file
+                if os.path.exists(temp_video_path):
+                    os.remove(temp_video_path)
 
         else:
             # Image processing

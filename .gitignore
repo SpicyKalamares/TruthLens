@@ -3,6 +3,7 @@
 
 # Dataset (large binary data)
 Dataset/
+Dataset_resplit/
 
 # Trained models (large binary files)
 models/*.pth
