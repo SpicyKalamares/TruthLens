@@ -1,6 +1,7 @@
 # TruthLens - AI-Generated Media Detection
 # Python 3.14 compatible (using PyTorch)
 
+streamlit>=1.32.0
 torch>=2.2.0
 torchvision>=0.17.0
 numpy>=1.26.0
