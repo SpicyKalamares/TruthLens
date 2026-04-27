@@ -172,7 +172,7 @@ def load_model():
             )
 
         # Load checkpoint (handle both checkpoint dict and state dict)
-        checkpoint = torch.load(MODEL_PATH, map_location=DEVICE)
+        checkpoint = torch.load(MODEL_PATH, map_location=DEVICE, weights_only=False)
         if isinstance(checkpoint, dict) and 'model_state' in checkpoint:
             model.load_state_dict(checkpoint['model_state'])
         else:
@@ -392,6 +392,10 @@ def main():
         layout="wide"
     )
 
+    # Initialize session state for upload reset
+    if "upload_counter" not in st.session_state:
+        st.session_state.upload_counter = 0
+
     # Custom CSS styling
     st.markdown("""
     <style>
@@ -510,6 +514,25 @@ def main():
         margin-bottom: 2rem;
     }
 
+    /* Tech stack badges */
+    .tech-badges {
+        display: flex;
+        gap: 0.75rem;
+        justify-content: center;
+        margin-bottom: 2rem;
+        flex-wrap: wrap;
+    }
+
+    .tech-badge {
+        background: rgba(20, 184, 166, 0.1);
+        border: 1px solid rgba(20, 184, 166, 0.3);
+        color: var(--primary);
+        padding: 0.4rem 0.9rem;
+        border-radius: 0.5rem;
+        font-size: 0.8rem;
+        font-weight: 600;
+    }
+
     /* Upload area */
     .upload-area {
         border: 2px dashed rgba(20, 184, 166, 0.3);
@@ -578,10 +601,15 @@ def main():
         gap: 0.5rem;
         color: rgba(255, 255, 255, 0.6);
         font-size: 0.875rem;
+        padding: 0.75rem 1.25rem;
+        background: rgba(20, 184, 166, 0.05);
+        border: 1px solid rgba(20, 184, 166, 0.2);
+        border-radius: 0.5rem;
     }
 
     .trust-icon {
         color: var(--primary);
+        font-size: 1rem;
     }
 
     /* Results section */
@@ -634,6 +662,190 @@ def main():
         font-size: 0.875rem;
         text-transform: uppercase;
         letter-spacing: 0.5px;
+    }
+
+    /* Circular gauge SVG */
+    .circular-gauge {
+        display: flex;
+        justify-content: center;
+        margin: 2rem 0;
+    }
+
+    .gauge-ring {
+        width: 180px;
+        height: 180px;
+    }
+
+    .gauge-percentage {
+        font-size: 3rem;
+        font-weight: 800;
+        text-align: center;
+        color: var(--primary);
+        margin-top: -120px;
+    }
+
+    .gauge-label-text {
+        text-align: center;
+        color: rgba(255, 255, 255, 0.6);
+        font-size: 0.875rem;
+        margin-top: 10px;
+    }
+
+    /* Frame analysis preview */
+    .frame-analysis {
+        background: rgba(20, 184, 166, 0.08);
+        border: 1px solid rgba(20, 184, 166, 0.2);
+        border-radius: 1rem;
+        padding: 1.5rem;
+        margin-top: 2rem;
+    }
+
+    .frame-analysis-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 1.5rem;
+    }
+
+    .frame-analysis-title {
+        font-size: 1.1rem;
+        font-weight: 600;
+        color: white;
+    }
+
+    .frame-legend {
+        display: flex;
+        gap: 1.5rem;
+        font-size: 0.875rem;
+    }
+
+    .legend-item {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+
+    .legend-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+    }
+
+    .legend-authentic {
+        background: var(--primary);
+    }
+
+    .legend-suspicious {
+        background: #f59e0b;
+    }
+
+    .frame-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+        gap: 1rem;
+        margin-top: 1.5rem;
+    }
+
+    .frame-thumb {
+        position: relative;
+        width: 100px;
+        height: 100px;
+        border-radius: 0.5rem;
+        overflow: hidden;
+        border: 2px solid rgba(255, 255, 255, 0.1);
+        cursor: pointer;
+        transition: all 0.3s;
+    }
+
+    .frame-thumb:hover {
+        border-color: var(--primary);
+        transform: scale(1.05);
+    }
+
+    .frame-thumb img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+    }
+
+    .frame-label {
+        position: absolute;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        background: rgba(0, 0, 0, 0.7);
+        color: white;
+        padding: 0.4rem;
+        font-size: 0.7rem;
+        font-weight: 600;
+        text-align: center;
+    }
+
+    .frame-label-real {
+        background: rgba(20, 184, 166, 0.8);
+    }
+
+    .frame-label-fake {
+        background: rgba(239, 68, 68, 0.8);
+    }
+
+    /* Overall progress section */
+    .progress-section {
+        background: rgba(20, 184, 166, 0.08);
+        border: 1px solid rgba(20, 184, 166, 0.2);
+        border-radius: 1rem;
+        padding: 2rem;
+        margin-top: 2rem;
+    }
+
+    .progress-header {
+        margin-bottom: 1.5rem;
+    }
+
+    .progress-title {
+        font-size: 1.1rem;
+        font-weight: 600;
+        color: white;
+        margin-bottom: 0.5rem;
+    }
+
+    .progress-description {
+        color: rgba(255, 255, 255, 0.6);
+        font-size: 0.875rem;
+    }
+
+    .progress-bar-container {
+        margin: 1.5rem 0;
+    }
+
+    .progress-bar-value {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 0.5rem;
+        font-size: 0.875rem;
+    }
+
+    .progress-bar-fill {
+        width: 100%;
+        height: 8px;
+        background: rgba(20, 184, 166, 0.2);
+        border-radius: 9999px;
+        overflow: hidden;
+    }
+
+    .progress-bar-progress {
+        height: 100%;
+        background: linear-gradient(90deg, var(--primary), #14b8a6);
+        width: 0%;
+        transition: width 0.5s ease;
+        border-radius: 9999px;
+    }
+
+    .progress-details {
+        margin-top: 1rem;
+        font-size: 0.875rem;
+        color: rgba(255, 255, 255, 0.6);
     }
 
     /* Metrics grid */
@@ -742,408 +954,244 @@ def main():
         opacity: 0.9;
         transform: translateY(-2px);
     }
+
+    /* Style Streamlit buttons to match theme */
+    button[data-testid="baseButton"],
+    button[kind="primary"],
+    .stButton > button {
+        background: rgb(20, 184, 166) !important;
+        color: white !important;
+        border: 1px solid rgb(20, 184, 166) !important;
+        font-weight: 900 !important;
+        font-size: 1.15rem !important;
+        letter-spacing: 2px !important;
+        text-transform: uppercase !important;
+        text-shadow: 0 2px 4px rgba(0, 0, 0, 0.4), 0 1px 2px rgba(0, 0, 0, 0.3) !important;
+        transition: all 0.3s ease !important;
+        border-radius: 0.625rem !important;
+        padding: 0.9rem 2.5rem !important;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.15) !important;
+    }
+
+    button[data-testid="baseButton"]:hover,
+    button[kind="primary"]:hover,
+    .stButton > button:hover {
+        background: rgb(15, 155, 140) !important;
+        border-color: rgb(15, 155, 140) !important;
+        transform: translateY(-2px) !important;
+        box-shadow: 0 8px 12px rgba(20, 184, 166, 0.3) !important;
+        text-shadow: 0 2px 5px rgba(0, 0, 0, 0.5) !important;
+    }
+
+    button[data-testid="baseButton"]:active,
+    button[kind="primary"]:active,
+    .stButton > button:active {
+        transform: translateY(0) !important;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1) !important;
+    }
     </style>
     """, unsafe_allow_html=True)
 
     # Header with branding
-    st.markdown('<div style="display: flex; align-items: center; gap: 0.5rem; color: white; font-weight: bold; font-size: 1.5rem; margin-bottom: 1.5rem;">🛡️ TruthLens</div>', unsafe_allow_html=True)
+    st.markdown('<div style="display: flex; align-items: center; gap: 0.5rem; color: white; font-weight: bold; font-size: 2.5rem; margin-bottom: 2rem;">🛡️ TruthLens</div>', unsafe_allow_html=True)
     
-    # Navigation Tabs
-    nav_tabs = st.tabs(["Analyze", "Results", "About"])
-    
-    # ============ ANALYZE TAB ============
-    with nav_tabs[0]:
-        # Load model
-        try:
-            model = load_model()
-            gpu_status = "GPU" if torch.cuda.is_available() else "CPU"
-        except FileNotFoundError:
-            st.error(f"Model not found at {MODEL_PATH}. Please train the model first.")
-            return
+    # Load model
+    try:
+        model = load_model()
+        gpu_status = "GPU" if torch.cuda.is_available() else "CPU"
+    except FileNotFoundError:
+        st.error(f"Model not found at {MODEL_PATH}. Please train the model first.")
+        return
 
-        # Hero Section
-        st.markdown('<h1 class="hero-title">Detect<span class="hero-title-accent">AI-Generated</span>Media Instantly</h1>', unsafe_allow_html=True)
-        st.markdown('<p class="hero-subtitle">Upload any image or video and our deep learning model will analyze it for signs of deepfake manipulation — in seconds.</p>', unsafe_allow_html=True)
+    # Hero Section
+    st.markdown('<h1 class="hero-title">Detect<span class="hero-title-accent">AI-Generated</span>Media Instantly</h1>', unsafe_allow_html=True)
+    st.markdown('<p class="hero-subtitle">Upload any image or video to analyze it for signs of deepfake manipulation — in seconds.</p>', unsafe_allow_html=True)
 
-        # Trust badges
-        st.markdown("""
-        <div class="badge-container">
-            <span class="badge-pill">✅ Highly Accurate</span>
-            <span class="badge-pill">🔒 Privacy First</span>
-        </div>
-        """, unsafe_allow_html=True)
+    # File upload
+    uploaded_file = st.file_uploader(
+        "Upload your media file",
+        type=['jpg', 'jpeg', 'png', 'bmp', 'webp', 'mp4', 'avi', 'mov', 'mkv'],
+        key=f"file_uploader_{st.session_state.upload_counter}"
+    )
 
-        # Upload Area
-        st.markdown("""
-        <div class="upload-area">
-            <div class="upload-icon">☁️</div>
-            <div class="upload-text">Drag & Drop your file here</div>
-            <div class="upload-subtext">or click to browse files</div>
-            <div class="file-types">
-                <span class="file-type">JPG</span>
-                <span class="file-type">PNG</span>
-                <span class="file-type">MP4</span>
-                <span class="file-type">MOV</span>
-                <span class="file-type">AVI</span>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
+    if uploaded_file is not None:
+        file_type = uploaded_file.type
+        is_video = 'video' in file_type or uploaded_file.name.endswith(('.mp4', '.avi', '.mov', '.mkv'))
 
-        # File upload
-        uploaded_file = st.file_uploader(
-            "",
-            type=['jpg', 'jpeg', 'png', 'bmp', 'webp', 'mp4', 'avi', 'mov', 'mkv'],
-            label_visibility="collapsed"
-        )
+        if is_video:
+            # Video processing - save to temporary file since cv2.VideoCapture needs a file path
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.mp4') as temp_video:
+                temp_video.write(uploaded_file.read())
+                temp_video_path = temp_video.name
+            
+            try:
+                cap = cv2.VideoCapture(temp_video_path)
 
-        # Trust indicators
-        st.markdown("""
-        <div class="trust-indicators">
-            <div class="trust-item">
-                <span class="trust-icon">🔒</span>
-                <span>Your data stays private</span>
-            </div>
-            <div class="trust-item">
-                <span class="trust-icon">⚡</span>
-                <span>Instant results</span>
-            </div>
-            <div class="trust-item">
-                <span class="trust-icon">✅</span>
-                <span>Trusted by millions</span>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-
-        if uploaded_file is not None:
-            file_type = uploaded_file.type
-            is_video = 'video' in file_type or uploaded_file.name.endswith(('.mp4', '.avi', '.mov', '.mkv'))
-
-            # Show file info card
-            st.markdown(f"""
-            <div class="result-card">
-                <div style="display: flex; gap: 1rem;">
-                    <div style="flex-shrink: 0;">
-                        📹
-                    </div>
-                    <div style="flex-grow: 1;">
-                        <div style="color: white; font-weight: 600; margin-bottom: 0.25rem;">{uploaded_file.name}</div>
-                        <div style="color: rgba(255, 255, 255, 0.6); font-size: 0.875rem;">
-                            {round(len(uploaded_file.getvalue()) / 1024 / 1024, 1)} MB · {uploaded_file.type}
-                        </div>
-                    </div>
-                    <div style="color: var(--primary); font-size: 0.875rem;">Analyzing...</div>
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
-
-            if is_video:
-                # Video processing - save to temporary file since cv2.VideoCapture needs a file path
-                with tempfile.NamedTemporaryFile(delete=False, suffix='.mp4') as temp_video:
-                    temp_video.write(uploaded_file.read())
-                    temp_video_path = temp_video.name
-                
-                try:
-                    # Progress steps
-                    st.markdown("""
-                    <div class="progress-steps">
-                        <div class="progress-step">
-                            <div class="step-circle completed">✓</div>
-                            <div class="step-label">Model Init</div>
-                        </div>
-                        <div class="progress-step">
-                            <div class="step-circle active">2</div>
-                            <div class="step-label">Frame Extraction</div>
-                        </div>
-                        <div class="progress-step">
-                            <div class="step-circle">3</div>
-                            <div class="step-label">Deep Analysis</div>
-                        </div>
-                        <div class="progress-step">
-                            <div class="step-circle">4</div>
-                            <div class="step-label">Generating Report</div>
-                        </div>
-                    </div>
-                    """, unsafe_allow_html=True)
-
-                    st.markdown("Our AI model is scanning for deepfake artifacts and inconsistencies...")
-
-                    cap = cv2.VideoCapture(temp_video_path)
-
-                    if not cap.isOpened():
-                        st.error("Could not open video file")
-                        return
-
-                    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-                    frame_interval = max(1, total_frames // 60)
-
-                    fake_count = 0
-                    real_count = 0
-                    progress_bar = st.progress(0)
-
-                    frame_count = 0
-                    analyzed = 0
-                    all_fake_probs = []
-
-                    while True:
-                        ret, frame = cap.read()
-                        if not ret:
-                            break
-
-                        if frame_count % frame_interval == 0:
-                            _, _, fake_prob, _ = predict_video_frame_tta(model, frame)
-                            all_fake_probs.append(fake_prob)
-                            analyzed += 1
-                            progress_bar.progress(min(1.0, analyzed / min(60, total_frames)))
-
-                        frame_count += 1
-
-                        if analyzed >= 60:
-                            break
-
-                    cap.release()
-
-                    # Temporal smoothing
-                    window_size = 5
-                    smoothed_probs = []
-                    for i in range(len(all_fake_probs)):
-                        start = max(0, i - window_size // 2)
-                        end = min(len(all_fake_probs), i + window_size // 2 + 1)
-                        smoothed_probs.append(sum(all_fake_probs[start:end]) / len(all_fake_probs[start:end]))
-
-                    for prob in smoothed_probs:
-                        if prob > 0.5:
-                            fake_count += 1
-                        else:
-                            real_count += 1
-
-                    total = fake_count + real_count
-                    fake_ratio = fake_count / total if total > 0 else 0
-
-                    # Results display
-                    st.markdown("<h2 style='color: white; text-align: center; font-size: 2rem; margin-top: 2rem;'>Analysis Complete ✓</h2>", unsafe_allow_html=True)
-                    st.markdown("<p style='color: rgba(255, 255, 255, 0.6); text-align: center;'>Here are the detailed results for your uploaded media.</p>", unsafe_allow_html=True)
-
-                    if fake_ratio > 0.5:
-                        st.markdown(f"""
-                        <div class="result-card result-card-fake">
-                            <div class="result-title result-title-fake">❌ DEEPFAKE DETECTED</div>
-                            <div style="text-align: center; font-size: 2.5rem; font-weight: 800; color: #ef4444; margin: 1rem 0;">
-                                {fake_ratio:.0%} Confidence
-                            </div>
-                            <div style="text-align: center; color: rgba(255, 255, 255, 0.6);">
-                                This video appears to contain AI-generated or manipulated content
-                            </div>
-                        </div>
-                        """, unsafe_allow_html=True)
-                    else:
-                        st.markdown(f"""
-                        <div class="result-card">
-                            <div class="result-title">✅ AUTHENTIC</div>
-                            <div style="text-align: center; font-size: 2.5rem; font-weight: 800; color: var(--primary); margin: 1rem 0;">
-                                {(1-fake_ratio):.0%} Confidence
-                            </div>
-                            <div style="text-align: center; color: rgba(255, 255, 255, 0.6);">
-                                This video appears to be authentic with no signs of AI manipulation
-                            </div>
-                        </div>
-                        """, unsafe_allow_html=True)
-
-                    # Metrics
-                    st.markdown("""
-                    <div class="metrics-grid">
-                        <div class="metric-card">
-                            <div class="metric-icon">📊</div>
-                            <div class="metric-label">Frames Analyzed</div>
-                            <div class="metric-value">""" + str(analyzed) + """</div>
-                        </div>
-                        <div class="metric-card">
-                            <div class="metric-icon">❌</div>
-                            <div class="metric-label">Fake Frames</div>
-                            <div class="metric-value" style="color: #ef4444;">""" + str(fake_count) + """</div>
-                        </div>
-                        <div class="metric-card">
-                            <div class="metric-icon">✅</div>
-                            <div class="metric-label">Real Frames</div>
-                            <div class="metric-value" style="color: var(--primary);">""" + str(real_count) + """</div>
-                        </div>
-                    </div>
-                    """, unsafe_allow_html=True)
-
-                finally:
-                    if os.path.exists(temp_video_path):
-                        os.remove(temp_video_path)
-
-            else:
-                # Image processing
-                image_bytes = uploaded_file.read()
-
-                # Progress steps
-                st.markdown("""
-                <div class="progress-steps">
-                    <div class="progress-step">
-                        <div class="step-circle completed">✓</div>
-                        <div class="step-label">Model Init</div>
-                    </div>
-                    <div class="progress-step">
-                        <div class="step-circle completed">✓</div>
-                        <div class="step-label">Frame Extraction</div>
-                    </div>
-                    <div class="progress-step">
-                        <div class="step-circle active">3</div>
-                        <div class="step-label">Deep Analysis</div>
-                    </div>
-                    <div class="progress-step">
-                        <div class="step-circle">4</div>
-                        <div class="step-label">Generating Report</div>
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
-
-                st.markdown("Our AI model is scanning for deepfake artifacts and inconsistencies...")
-
-                try:
-                    class_name, confidence, fake_prob, real_prob = predict_image_tta(model, image_bytes)
-                except Exception as e:
-                    st.error(f"Error processing image: {e}")
+                if not cap.isOpened():
+                    st.error("Could not open video file")
                     return
 
-                # Display results
-                st.markdown("<h2 style='color: white; text-align: center; font-size: 2rem; margin-top: 2rem;'>Analysis Complete ✓</h2>", unsafe_allow_html=True)
+                total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                frame_interval = max(1, total_frames // 60)
+
+                fake_count = 0
+                real_count = 0
+                progress_bar = st.progress(0)
+
+                frame_count = 0
+                analyzed = 0
+                all_fake_probs = []
+
+                while True:
+                    ret, frame = cap.read()
+                    if not ret:
+                        break
+
+                    if frame_count % frame_interval == 0:
+                        _, _, fake_prob, _ = predict_video_frame_tta(model, frame)
+                        all_fake_probs.append(fake_prob)
+                        analyzed += 1
+                        progress_bar.progress(min(1.0, analyzed / min(60, total_frames)))
+
+                    frame_count += 1
+
+                    if analyzed >= 60:
+                        break
+
+                cap.release()
+
+                # Temporal smoothing
+                window_size = 5
+                smoothed_probs = []
+                for i in range(len(all_fake_probs)):
+                    start = max(0, i - window_size // 2)
+                    end = min(len(all_fake_probs), i + window_size // 2 + 1)
+                    smoothed_probs.append(sum(all_fake_probs[start:end]) / len(all_fake_probs[start:end]))
+
+                for prob in smoothed_probs:
+                    if prob > 0.5:
+                        fake_count += 1
+                    else:
+                        real_count += 1
+
+                total = fake_count + real_count
+                fake_ratio = fake_count / total if total > 0 else 0
+
+                # Results display
+                st.divider()
+                st.markdown("<h2 style='color: white; text-align: center; font-size: 2rem; margin-top: 2rem;'>Analysis Complete</h2>", unsafe_allow_html=True)
                 st.markdown("<p style='color: rgba(255, 255, 255, 0.6); text-align: center;'>Here are the detailed results for your uploaded media.</p>", unsafe_allow_html=True)
 
-                col1, col2 = st.columns([1, 1], gap="large")
+                if fake_ratio > 0.5:
+                    st.markdown(f"""
+                    <div class="result-card result-card-fake">
+                        <div class="result-title result-title-fake">❌ DEEPFAKE DETECTED</div>
+                        <div style="text-align: center; font-size: 2.5rem; font-weight: 800; color: #ef4444; margin: 1rem 0;">
+                            {fake_ratio:.0%} Confidence
+                        </div>
+                        <div style="text-align: center; color: rgba(255, 255, 255, 0.6);">
+                            This video appears to contain AI-generated or manipulated content
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                else:
+                    st.markdown(f"""
+                    <div class="result-card">
+                        <div class="result-title">✅ AUTHENTIC</div>
+                        <div style="text-align: center; font-size: 2.5rem; font-weight: 800; color: var(--primary); margin: 1rem 0;">
+                            {(1-fake_ratio):.0%} Confidence
+                        </div>
+                        <div style="text-align: center; color: rgba(255, 255, 255, 0.6);">
+                            This video appears to be authentic with no signs of AI manipulation
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
 
-                with col1:
-                    # Display image
+                # Metrics
+                st.markdown("""
+                <div class="metrics-grid">
+                    <div class="metric-card">
+                        <div class="metric-icon">📊</div>
+                        <div class="metric-label">Frames Analyzed</div>
+                        <div class="metric-value">""" + str(analyzed) + """</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-icon">❌</div>
+                        <div class="metric-label">Fake Frames</div>
+                        <div class="metric-value" style="color: #ef4444;">""" + str(fake_count) + """</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-icon">✅</div>
+                        <div class="metric-label">Real Frames</div>
+                        <div class="metric-value" style="color: var(--primary);">""" + str(real_count) + """</div>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+
+            finally:
+                if os.path.exists(temp_video_path):
+                    os.remove(temp_video_path)
+
+        else:
+            # Image processing
+            image_bytes = uploaded_file.read()
+
+            try:
+                class_name, confidence, fake_prob, real_prob = predict_image_tta(model, image_bytes)
+            except Exception as e:
+                st.error(f"Error processing image: {e}")
+                return
+
+            # Display results
+            st.divider()
+            st.markdown("<h2 style='color: white; text-align: center; font-size: 2rem; margin-top: 2rem;'>Analysis Complete</h2>", unsafe_allow_html=True)
+            st.markdown("<p style='color: rgba(255, 255, 255, 0.6); text-align: center;'>Here are the detailed results for your uploaded media.</p>", unsafe_allow_html=True)
+
+            col1, col2 = st.columns([1, 1], gap="large")
+
+            with col1:
+                # Display image centered in the column with padding
+                left_pad, image_col, right_pad = st.columns([2, 5, 0.2])
+                with image_col:
                     image_display = Image.open(io.BytesIO(image_bytes)).convert('RGB')
-                    st.image(image_display, caption=None)
+                    st.image(image_display, caption=None, width=500)
 
-                with col2:
-                    # Result display
-                    if class_name == 'Fake':
-                        st.markdown(f"""
-                        <div class="result-card result-card-fake">
-                            <div class="result-title result-title-fake">❌ DEEPFAKE DETECTED</div>
-                            <div style="text-align: center;">
-                                <div style="font-size: 3rem; font-weight: 800; color: #ef4444; margin: 1rem 0;">{confidence:.0%}</div>
-                                <div style="color: rgba(255, 255, 255, 0.6); font-size: 0.875rem;">Confidence</div>
-                            </div>
-                            <div style="margin-top: 1.5rem; padding: 1rem; background: rgba(220, 38, 38, 0.1); border-radius: 0.5rem; color: rgba(255, 255, 255, 0.8); font-size: 0.875rem;">
-                                <strong>Frames Analyzed:</strong> 142
-                            </div>
-                            <div style="margin-top: 0.5rem; padding: 1rem; background: rgba(220, 38, 38, 0.1); border-radius: 0.5rem; color: rgba(255, 255, 255, 0.8); font-size: 0.875rem;">
-                                <strong>Anomalies Found:</strong> 31
-                            </div>
+            with col2:
+                # Result display
+                if class_name == 'Fake':
+                    st.markdown(f"""
+                    <div class="result-card result-card-fake" style="padding: 2rem; text-align: center;">
+                        <div class="result-title result-title-fake">❌ DEEPFAKE DETECTED</div>
+                        <div style="font-size: 3rem; font-weight: 800; color: #ef4444; margin: 1rem 0;">AI-Generated Image</div>
+                        <div style="margin-top: 1.5rem; padding: 1rem; background: rgba(220, 38, 38, 0.1); border-radius: 0.5rem; color: rgba(255, 255, 255, 0.8); font-size: 0.875rem;">
+                            <strong>Frames Analyzed:</strong> 142
                         </div>
-                        """, unsafe_allow_html=True)
-                    else:
-                        st.markdown(f"""
-                        <div class="result-card">
-                            <div class="result-title">✅ AUTHENTIC</div>
-                            <div style="text-align: center;">
-                                <div style="font-size: 3rem; font-weight: 800; color: var(--primary); margin: 1rem 0;">{confidence:.0%}</div>
-                                <div style="color: rgba(255, 255, 255, 0.6); font-size: 0.875rem;">Confidence</div>
-                            </div>
-                            <div style="margin-top: 1.5rem; padding: 1rem; background: rgba(20, 184, 166, 0.1); border-radius: 0.5rem; color: rgba(255, 255, 255, 0.8); font-size: 0.875rem;">
-                                <strong>Frames Analyzed:</strong> 142
-                            </div>
-                            <div style="margin-top: 0.5rem; padding: 1rem; background: rgba(20, 184, 166, 0.1); border-radius: 0.5rem; color: rgba(255, 255, 255, 0.8); font-size: 0.875rem;">
-                                <strong>Anomalies Found:</strong> 3
-                            </div>
+                        <div style="margin-top: 0.5rem; padding: 1rem; background: rgba(220, 38, 38, 0.1); border-radius: 0.5rem; color: rgba(255, 255, 255, 0.8); font-size: 0.875rem;">
+                            <strong>Anomalies Found:</strong> 31
                         </div>
-                        """, unsafe_allow_html=True)
-
-                # Detailed metrics
-                st.markdown("""
-                <div class="metrics-grid" style="margin-top: 2rem;">
-                    <div class="metric-card">
-                        <div class="metric-icon">👁️</div>
-                        <div class="metric-label">Facial Inconsistencies</div>
-                        <div class="metric-value">12 detected</div>
                     </div>
-                    <div class="metric-card">
-                        <div class="metric-icon">🎨</div>
-                        <div class="metric-label">Texture Artifacts</div>
-                        <div class="metric-value">High</div>
+                    """, unsafe_allow_html=True)
+                else:
+                    st.markdown(f"""
+                    <div class="result-card" style="padding: 2rem; text-align: center;">
+                        <div class="result-title">✅ AUTHENTIC</div>
+                        <div style="font-size: 3rem; font-weight: 800; color: rgb(20, 184, 166); margin: 1rem 0;">Real Image</div>
+                        <div style="margin-top: 1.5rem; padding: 1rem; background: rgba(20, 184, 166, 0.1); border-radius: 0.5rem; color: rgba(255, 255, 255, 0.8); font-size: 0.875rem;">
+                            <strong>Frames Analyzed:</strong> 142
+                        </div>
+                        <div style="margin-top: 0.5rem; padding: 1rem; background: rgba(20, 184, 166, 0.1); border-radius: 0.5rem; color: rgba(255, 255, 255, 0.8); font-size: 0.875rem;">
+                            <strong>Anomalies Found:</strong> 3
+                        </div>
                     </div>
-                    <div class="metric-card">
-                        <div class="metric-icon">⏱️</div>
-                        <div class="metric-label">Analysis Time</div>
-                        <div class="metric-value">4.2s</div>
-                    </div>
-                    <div class="metric-card">
-                        <div class="metric-icon">🔋</div>
-                        <div class="metric-label">Processing</div>
-                        <div class="metric-value">GPU</div>
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
+                    """, unsafe_allow_html=True)
 
-                # CTA Button
-                st.markdown("""
-                <div style="text-align: center; margin-top: 2rem;">
-                    <button class="action-button" style="padding: 0.75rem 2rem;">🔄 Analyze Another File</button>
-                </div>
-                """, unsafe_allow_html=True)
-
-    # ============ RESULTS TAB ============
-    with nav_tabs[1]:
-        st.markdown('<h2 style="color: white; margin-bottom: 1.5rem;">📈 Analysis Results</h2>', unsafe_allow_html=True)
-        
-        st.markdown("""
-        <div style="background: rgba(20, 184, 166, 0.08); border: 1px solid rgba(20, 184, 166, 0.2); border-radius: 1rem; padding: 2rem; text-align: center; color: rgba(255, 255, 255, 0.6);">
-            <p style="margin: 0; font-size: 1rem;">No analysis results yet.</p>
-            <p style="margin: 0.5rem 0 0 0; font-size: 0.875rem;">Upload and analyze media in the <strong>Analyze</strong> tab to see results here.</p>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        st.markdown("#### How results work", unsafe_allow_html=True)
-        st.markdown("""
-        - **Analyze Tab**: Upload images or videos to detect AI-generated content
-        - **Results Display**: See detailed analysis with confidence scores
-        - **Detection Metrics**: Get insights on facial inconsistencies, texture artifacts, and more
-        - **History**: Your recent analyses will appear here for reference
-        """, unsafe_allow_html=True)
-
-    # ============ ABOUT TAB ============
-    with nav_tabs[2]:
-        st.markdown('<h2 style="color: white; margin-bottom: 1.5rem;">ℹ️ About TruthLens</h2>', unsafe_allow_html=True)
-        
-        st.markdown("""
-        ## What is TruthLens?
-        
-        TruthLens is an AI-powered tool that helps you detect fake or AI-generated images and videos. Whether it's deepfakes, face-swaps, or manipulated media, TruthLens analyzes and identifies suspicious content.
-        
-        ### How It Works
-        
-        1. **Upload** your image or video file
-        2. **We analyze** the content for signs of manipulation
-        3. **Get results** showing whether the media is authentic or AI-generated
-        4. **See details** about what we found
-        
-        ### Why Use TruthLens?
-        
-        ✅ **Fast Results**  
-        Get analysis results in seconds, not minutes.
-        
-        🔒 **Your Privacy Matters**  
-        We don't store or share your files. All processing happens securely.
-        
-        ✨ **Easy to Use**  
-        Simply upload a file and get a clear answer. No technical knowledge needed.
-        
-        🎯 **Highly Accurate**  
-        Our system is trained to spot even subtle signs of AI manipulation.
-        
-        ### Supported Files
-        
-        **Images**: JPG, PNG, BMP, WebP  
-        **Videos**: MP4, MOV, AVI, MKV
-        
-        ### Questions?
-        
-        If you're unsure if media is real, TruthLens can help. Upload it here and see what we find!
-        """, unsafe_allow_html=True)
+            # CTA Button - functional version with improved styling
+            st.markdown('<div style="margin-top: 2.5rem;"></div>', unsafe_allow_html=True)
+            col1, col2, col3 = st.columns([1, 2, 1])
+            with col2:
+                if st.button("Analyze Another File", use_container_width=True, key="analyze_another"):
+                    st.session_state.upload_counter += 1
+                    st.rerun()
 
     # Footer
     st.markdown("""
